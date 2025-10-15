@@ -1,5 +1,8 @@
 # traefik-jwt-plugin ![Build](https://github.com/traefik-plugins/traefik-jwt-plugin/actions/workflows/build.yaml/badge.svg)
 
+> [!IMPORTANT]
+> This project is looking for maintainers. Please comment in [this issue](https://github.com/traefik-plugins/traefik-jwt-plugin/issues/82)
+
 Traefik plugin for verifying JSON Web Tokens (JWT). Supports public keys, certificates or JWKS endpoints.
 Supports RSA, ECDSA and symmetric keys. Supports Open Policy Agent (OPA) for additional authorization checks.
 
