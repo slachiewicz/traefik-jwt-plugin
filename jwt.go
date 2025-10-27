@@ -536,92 +536,147 @@ func (jwtPlugin *JwtPlugin) CheckToken(request *http.Request, rw http.ResponseWr
 
 func (jwtPlugin *JwtPlugin) ExtractToken(request *http.Request) (*JWT, error) {
 	// extract from header, cookie, or query with given priority
-	var jwtTokenStr string
-	var err error
+	var allTokenStrings []string
+	var lastErr error
 	for _, sourceconfig := range jwtPlugin.jwtSources {
 		sourcetype, oktype := sourceconfig["type"]
 		if !oktype || (sourcetype != "bearer" && sourcetype != "header" && sourcetype != "cookie" && sourcetype != "query") {
-			jwtTokenStr, err = "", fmt.Errorf("source type unknown")
+			lastErr = fmt.Errorf("source type unknown")
 			continue
 		}
 		sourcekey, okkey := sourceconfig["key"]
 		if !okkey || sourcekey == "" {
-			jwtTokenStr, err = "", fmt.Errorf("source key not found or empty")
+			lastErr = fmt.Errorf("source key not found or empty")
 			continue
 		}
+		var tokenStrings []string
+		var err error
 		switch sourcetype {
 		case "bearer":
-			jwtTokenStr, err = jwtPlugin.extractTokenFromBearer(request, sourcekey)
+			tokenStrings, err = jwtPlugin.extractTokensFromBearer(request, sourcekey)
 		case "header":
-			jwtTokenStr, err = jwtPlugin.extractTokenFromHeader(request, sourcekey)
+			tokenStrings, err = jwtPlugin.extractTokensFromHeader(request, sourcekey)
 		case "cookie":
-			jwtTokenStr, err = jwtPlugin.extractTokenFromCookie(request, sourcekey)
+			var tokenStr string
+			tokenStr, err = jwtPlugin.extractTokenFromCookie(request, sourcekey)
+			if err == nil && tokenStr != "" {
+				tokenStrings = []string{tokenStr}
+			}
 		case "query":
-			jwtTokenStr, err = jwtPlugin.extractTokenFromQuery(request, sourcekey)
+			var tokenStr string
+			tokenStr, err = jwtPlugin.extractTokenFromQuery(request, sourcekey)
+			if err == nil && tokenStr != "" {
+				tokenStrings = []string{tokenStr}
+			}
 		}
-		if err == nil && jwtTokenStr != "" {
+		if err == nil && len(tokenStrings) > 0 {
+			allTokenStrings = tokenStrings
+			lastErr = nil
 			break
 		}
+		if err != nil {
+			lastErr = err
+		}
 	}
-	if err != nil {
-		return nil, err
+	if len(allTokenStrings) == 0 {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("no token found")
 	}
 
-	parts := strings.Split(jwtTokenStr, ".")
-	if len(parts) != 3 {
-		logError("Invalid token format, expected 3 parts").
+	// Try to parse each token string until one succeeds
+	var lastParseErr error
+	for _, jwtTokenStr := range allTokenStrings {
+		parts := strings.Split(jwtTokenStr, ".")
+		if len(parts) != 3 {
+			lastParseErr = fmt.Errorf("invalid token format")
+			continue
+		}
+		header, err := base64.RawURLEncoding.DecodeString(parts[0])
+		if err != nil {
+			lastParseErr = err
+			continue
+		}
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			lastParseErr = err
+			continue
+		}
+		signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+		if err != nil {
+			lastParseErr = err
+			continue
+		}
+		jwtToken := JWT{
+			Plaintext: []byte(jwtTokenStr[0 : len(parts[0])+len(parts[1])+1]),
+			Signature: signature,
+		}
+		err = json.Unmarshal(header, &jwtToken.Header)
+		if err != nil {
+			lastParseErr = err
+			continue
+		}
+		d := json.NewDecoder(bytes.NewBuffer(payload))
+		d.UseNumber()
+		err = d.Decode(&jwtToken.Payload)
+		if err != nil {
+			lastParseErr = err
+			continue
+		}
+		// Successfully parsed this token, return it
+		return &jwtToken, nil
+	}
+
+	// None of the tokens could be parsed
+	if lastParseErr != nil {
+		logError("Invalid token format").
 			withUrl(request.URL.String()).
 			withNetwork(jwtPlugin.remoteAddr(request)).
 			print()
-		return nil, fmt.Errorf("invalid token format")
+		return nil, lastParseErr
 	}
-	header, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return nil, err
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, err
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return nil, err
-	}
-	jwtToken := JWT{
-		Plaintext: []byte(jwtTokenStr[0 : len(parts[0])+len(parts[1])+1]),
-		Signature: signature,
-	}
-	err = json.Unmarshal(header, &jwtToken.Header)
-	if err != nil {
-		return nil, err
-	}
-	d := json.NewDecoder(bytes.NewBuffer(payload))
-	d.UseNumber()
-	err = d.Decode(&jwtToken.Payload)
-	if err != nil {
-		return nil, err
-	}
-	return &jwtToken, nil
+	return nil, fmt.Errorf("invalid token format")
 }
 
-func (jwtPlugin *JwtPlugin) extractTokenFromHeader(request *http.Request, key string) (string, error) {
-	authHeader, ok := request.Header[key]
+func (jwtPlugin *JwtPlugin) extractTokensFromHeader(request *http.Request, key string) ([]string, error) {
+	authHeaders, ok := request.Header[key]
 	if !ok {
-		return "", fmt.Errorf("authorization header missing")
+		return nil, fmt.Errorf("authorization header missing")
 	}
-	auth := authHeader[0]
-	return auth, nil
+	var tokens []string
+	// Try all header values (handles duplicate headers)
+	for _, headerValue := range authHeaders {
+		// Also try comma-separated values within each header
+		values := strings.Split(headerValue, ",")
+		for _, value := range values {
+			trimmedValue := strings.TrimSpace(value)
+			if trimmedValue != "" {
+				tokens = append(tokens, trimmedValue)
+			}
+		}
+	}
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("authorization header missing")
+	}
+	return tokens, nil
 }
 
-func (jwtPlugin *JwtPlugin) extractTokenFromBearer(request *http.Request, key string) (string, error) {
-	auth, err := jwtPlugin.extractTokenFromHeader(request, key)
+func (jwtPlugin *JwtPlugin) extractTokensFromBearer(request *http.Request, key string) ([]string, error) {
+	allValues, err := jwtPlugin.extractTokensFromHeader(request, key)
 	if err != nil {
-		return auth, err
+		return nil, err
 	}
-	if !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
-		return "", fmt.Errorf("authorization type not Bearer")
+	var tokens []string
+	for _, auth := range allValues {
+		if strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+			tokens = append(tokens, auth[7:])
+		}
 	}
-	return auth[7:], nil
+	if len(tokens) == 0 {
+		return nil, fmt.Errorf("authorization type not Bearer")
+	}
+	return tokens, nil
 }
 
 func (jwtPlugin *JwtPlugin) extractTokenFromCookie(request *http.Request, key string) (string, error) {
