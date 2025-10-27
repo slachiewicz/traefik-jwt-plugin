@@ -207,3 +207,54 @@ func TestCombinedMultipleHeadersAndValues(t *testing.T) {
 		t.Fatalf("Expected header Name:John Doe, got %s", v)
 	}
 }
+package traefik_jwt_plugin
+
+import (
+"context"
+"net/http"
+"net/http/httptest"
+"testing"
+)
+
+// TestFallbackToOtherSources verifies that the plugin tries all configured sources
+// when tokens in earlier sources fail to parse
+func TestFallbackToOtherSources(t *testing.T) {
+cfg := Config{
+Required:   true,
+JwtHeaders: map[string]string{"Name": "name"},
+Keys:       []string{testPublicKey},
+JwtSources: []map[string]string{
+{"type": "bearer", "key": "Authorization"}, // First source: invalid token
+{"type": "cookie", "key": "jwt"},           // Second source: valid token
+},
+}
+ctx := context.Background()
+nextCalled := false
+next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) { nextCalled = true })
+
+jwt, err := New(ctx, next, &cfg, "test-traefik-jwt-plugin")
+if err != nil {
+t.Fatal(err)
+}
+
+recorder := httptest.NewRecorder()
+
+req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost", nil)
+if err != nil {
+t.Fatal(err)
+}
+
+// Set an invalid token in Authorization header
+req.Header["Authorization"] = []string{"Bearer invalid.token.here"}
+// Set a valid token in cookie
+req.AddCookie(&http.Cookie{Name: "jwt", Value: testValidToken})
+
+jwt.ServeHTTP(recorder, req)
+
+if !nextCalled {
+t.Fatal("Expected next.ServeHTTP to be called (should fallback to cookie), but it wasn't")
+}
+if v := req.Header.Get("Name"); v != "John Doe" {
+t.Fatalf("Expected header Name:John Doe, got %s", v)
+}
+}
