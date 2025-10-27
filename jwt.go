@@ -281,6 +281,9 @@ func (jwtPlugin *JwtPlugin) ParseKeys(certificates []string) error {
 			}
 		} else if u, err := url.ParseRequestURI(certificate); err == nil {
 			jwtPlugin.jwkEndpoints = append(jwtPlugin.jwkEndpoints, u)
+		} else if jwtPlugin.alg == "HS256" || jwtPlugin.alg == "HS384" || jwtPlugin.alg == "HS512" {
+			// For HMAC algorithms (HS256/HS384/HS512), treat the string as a shared secret
+			jwtPlugin.keys[strconv.Itoa(len(jwtPlugin.keys))] = []byte(certificate)
 		} else {
 			return fmt.Errorf("Invalid configuration, expecting a certificate, public key or JWK URL")
 		}
