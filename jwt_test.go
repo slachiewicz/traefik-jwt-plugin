@@ -1500,73 +1500,73 @@ func TestHMACWithPlainSecret(t *testing.T) {
 }
 
 func TestHMACPlainSecretEdgeCases(t *testing.T) {
-tests := []struct {
-name        string
-alg         string
-keys        []string
-token       string
-expectError bool
-errorMsg    string
-}{
-{
-name: "HS256 without Alg specified should reject plain string",
-alg:  "",
-keys: []string{"my-shared-secret"},
-token: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.HjhisU1VAQubnZlk62VJ4WnNZ-ZonWLJFj9zc5UUn5Y",
-expectError: true,
-errorMsg:    "Invalid configuration, expecting a certificate, public key or JWK URL",
-},
-{
-name: "Multiple keys including plain secret for HS256",
-alg:  "HS256",
-keys: []string{"wrong-secret", "my-shared-secret"},
-token: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.HjhisU1VAQubnZlk62VJ4WnNZ-ZonWLJFj9zc5UUn5Y",
-expectError: false,
-},
-}
+	tests := []struct {
+		name        string
+		alg         string
+		keys        []string
+		token       string
+		expectError bool
+		errorMsg    string
+	}{
+		{
+			name:        "HS256 without Alg specified should reject plain string",
+			alg:         "",
+			keys:        []string{"my-shared-secret"},
+			token:       "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.HjhisU1VAQubnZlk62VJ4WnNZ-ZonWLJFj9zc5UUn5Y",
+			expectError: true,
+			errorMsg:    "Invalid configuration, expecting a certificate, public key or JWK URL",
+		},
+		{
+			name:        "Multiple keys including plain secret for HS256",
+			alg:         "HS256",
+			keys:        []string{"wrong-secret", "my-shared-secret"},
+			token:       "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.HjhisU1VAQubnZlk62VJ4WnNZ-ZonWLJFj9zc5UUn5Y",
+			expectError: false,
+		},
+	}
 
-for _, tt := range tests {
-t.Run(tt.name, func(t *testing.T) {
-cfg := Config{
-Keys: tt.keys,
-Alg:  tt.alg,
-}
-ctx := context.Background()
-nextCalled := false
-next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) { nextCalled = true })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Keys: tt.keys,
+				Alg:  tt.alg,
+			}
+			ctx := context.Background()
+			nextCalled := false
+			next := http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) { nextCalled = true })
 
-jwt, err := New(ctx, next, &cfg, "test-traefik-jwt-plugin")
-if tt.expectError {
-if err == nil {
-t.Fatal("Expected error during New(), but got none")
-}
-if tt.errorMsg != "" && err.Error() != tt.errorMsg {
-t.Fatalf("Expected error message: %s, got: %s", tt.errorMsg, err.Error())
-}
-return
-}
+			jwt, err := New(ctx, next, &cfg, "test-traefik-jwt-plugin")
+			if tt.expectError {
+				if err == nil {
+					t.Fatal("Expected error during New(), but got none")
+				}
+				if tt.errorMsg != "" && err.Error() != tt.errorMsg {
+					t.Fatalf("Expected error message: %s, got: %s", tt.errorMsg, err.Error())
+				}
+				return
+			}
 
-if err != nil {
-t.Fatalf("Unexpected error during New(): %v", err)
-}
+			if err != nil {
+				t.Fatalf("Unexpected error during New(): %v", err)
+			}
 
-recorder := httptest.NewRecorder()
+			recorder := httptest.NewRecorder()
 
-req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost", nil)
-if err != nil {
-t.Fatal(err)
-}
-req.Header.Add("Authorization", tt.token)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Add("Authorization", tt.token)
 
-jwt.ServeHTTP(recorder, req)
+			jwt.ServeHTTP(recorder, req)
 
-resp := recorder.Result()
-if resp.StatusCode != http.StatusOK {
-t.Fatalf("Expected status code %d, received %d", http.StatusOK, resp.StatusCode)
-}
-if !nextCalled {
-t.Fatal("next.ServeHTTP was not called, but should have been")
-}
-})
-}
+			resp := recorder.Result()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("Expected status code %d, received %d", http.StatusOK, resp.StatusCode)
+			}
+			if !nextCalled {
+				t.Fatal("next.ServeHTTP was not called, but should have been")
+			}
+		})
+	}
 }
