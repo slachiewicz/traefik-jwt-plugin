@@ -536,7 +536,6 @@ func (jwtPlugin *JwtPlugin) CheckToken(request *http.Request, rw http.ResponseWr
 
 func (jwtPlugin *JwtPlugin) ExtractToken(request *http.Request) (*JWT, error) {
 	// extract from header, cookie, or query with given priority
-	var allTokenStrings []string
 	var lastErr error
 	for _, sourceconfig := range jwtPlugin.jwtSources {
 		sourcetype, oktype := sourceconfig["type"]
@@ -569,80 +568,73 @@ func (jwtPlugin *JwtPlugin) ExtractToken(request *http.Request) (*JWT, error) {
 				tokenStrings = []string{tokenStr}
 			}
 		}
-		if err == nil && len(tokenStrings) > 0 {
-			allTokenStrings = tokenStrings
-			lastErr = nil
-			break
-		}
 		if err != nil {
 			lastErr = err
+			continue
 		}
-	}
-	if len(allTokenStrings) == 0 {
-		if lastErr != nil {
-			return nil, lastErr
+		if len(tokenStrings) == 0 {
+			continue
 		}
-		return nil, fmt.Errorf("no token found")
+
+		// Try to parse each token string until one succeeds
+		for _, jwtTokenStr := range tokenStrings {
+			parts := strings.Split(jwtTokenStr, ".")
+			if len(parts) != 3 {
+				lastErr = fmt.Errorf("invalid token format")
+				continue
+			}
+			header, err := base64.RawURLEncoding.DecodeString(parts[0])
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			jwtToken := JWT{
+				Plaintext: []byte(jwtTokenStr[0 : len(parts[0])+len(parts[1])+1]),
+				Signature: signature,
+			}
+			err = json.Unmarshal(header, &jwtToken.Header)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			d := json.NewDecoder(bytes.NewBuffer(payload))
+			d.UseNumber()
+			err = d.Decode(&jwtToken.Payload)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			// Successfully parsed this token, return it
+			return &jwtToken, nil
+		}
+		// If we tried tokens from this source but none parsed successfully, continue to next source
 	}
 
-	// Try to parse each token string until one succeeds
-	var lastParseErr error
-	for _, jwtTokenStr := range allTokenStrings {
-		parts := strings.Split(jwtTokenStr, ".")
-		if len(parts) != 3 {
-			lastParseErr = fmt.Errorf("invalid token format")
-			continue
-		}
-		header, err := base64.RawURLEncoding.DecodeString(parts[0])
-		if err != nil {
-			lastParseErr = err
-			continue
-		}
-		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-		if err != nil {
-			lastParseErr = err
-			continue
-		}
-		signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-		if err != nil {
-			lastParseErr = err
-			continue
-		}
-		jwtToken := JWT{
-			Plaintext: []byte(jwtTokenStr[0 : len(parts[0])+len(parts[1])+1]),
-			Signature: signature,
-		}
-		err = json.Unmarshal(header, &jwtToken.Header)
-		if err != nil {
-			lastParseErr = err
-			continue
-		}
-		d := json.NewDecoder(bytes.NewBuffer(payload))
-		d.UseNumber()
-		err = d.Decode(&jwtToken.Payload)
-		if err != nil {
-			lastParseErr = err
-			continue
-		}
-		// Successfully parsed this token, return it
-		return &jwtToken, nil
-	}
-
-	// None of the tokens could be parsed
-	if lastParseErr != nil {
+	// None of the tokens from any source could be parsed
+	if lastErr != nil {
 		logError("Invalid token format").
 			withUrl(request.URL.String()).
 			withNetwork(jwtPlugin.remoteAddr(request)).
 			print()
-		return nil, lastParseErr
+		return nil, lastErr
 	}
-	return nil, fmt.Errorf("invalid token format")
+	return nil, fmt.Errorf("no token found")
 }
 
 func (jwtPlugin *JwtPlugin) extractTokensFromHeader(request *http.Request, key string) ([]string, error) {
 	authHeaders, ok := request.Header[key]
 	if !ok {
-		return nil, fmt.Errorf("authorization header missing")
+		return nil, fmt.Errorf("header %s missing", key)
 	}
 	var tokens []string
 	// Try all header values (handles duplicate headers)
@@ -657,7 +649,7 @@ func (jwtPlugin *JwtPlugin) extractTokensFromHeader(request *http.Request, key s
 		}
 	}
 	if len(tokens) == 0 {
-		return nil, fmt.Errorf("authorization header missing")
+		return nil, fmt.Errorf("header %s has no values", key)
 	}
 	return tokens, nil
 }
